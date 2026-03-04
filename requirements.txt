@@ -1,6 +1,6 @@
 fastapi
 uvicorn
-sentence-transformers==2.2.2
-torch==2.10.0
+sentence-transformers
+torch
 supabase
 python-dotenv
