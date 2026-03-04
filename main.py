@@ -1,78 +1,117 @@
-from fastapi import FastAPI, Header, HTTPException
-from pydantic import BaseModel
-from sentence_transformers import SentenceTransformer, util
-from supabase import create_client
 import os
+from fastapi import FastAPI, Header, HTTPException, Depends
+from pydantic import BaseModel
+from sentence_transformers import SentenceTransformer
+from sklearn.metrics.pairwise import cosine_similarity
+from supabase import create_client, Client
 
-API_KEY = os.environ.get("API_KEY")
-SUPABASE_URL = os.environ.get("SUPABASE_URL")
-SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
+# ===============================
+# Environment Variables
+# ===============================
 
-# Supabase client
-supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+SECRET_KEY = os.getenv("API_SECRET_KEY")
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 
-# Lightweight model for Render free plan
-model = SentenceTransformer("all-MiniLM-L6-v2")
+if not SECRET_KEY:
+    raise ValueError("API_SECRET_KEY not set")
+
+if not SUPABASE_URL or not SUPABASE_KEY:
+    raise ValueError("Supabase credentials not set")
+
+# ===============================
+# Initialize App
+# ===============================
 
 app = FastAPI()
+
+# Load embedding model (CPU friendly)
+model = SentenceTransformer("all-MiniLM-L6-v2")
+
+# Connect to Supabase
+supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+
+# ===============================
+# Request Model
+# ===============================
 
 class QuestionRequest(BaseModel):
     question: str
 
+# ===============================
+# API Key Verification
+# ===============================
 
-@app.get("/")
-def home():
-    return {"status": "API running"}
+def verify_api_key(x_api_key: str = Header(None)):
+    if x_api_key != SECRET_KEY:
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid or missing API Key"
+        )
 
+# ===============================
+# Similarity Function
+# ===============================
 
-@app.post("/ask")
-def ask_question(data: QuestionRequest, x_api_key: str = Header(None)):
+def calculate_similarity(q1: str, q2: str) -> float:
+    embeddings = model.encode([q1, q2])
+    similarity = cosine_similarity(
+        [embeddings[0]],
+        [embeddings[1]]
+    )[0][0]
+    return similarity * 100
 
-    if x_api_key != API_KEY:
-        raise HTTPException(status_code=401, detail="Invalid API Key")
+# ===============================
+# API Endpoint
+# ===============================
+
+@app.post("/ask", dependencies=[Depends(verify_api_key)])
+def ask_question(data: QuestionRequest):
 
     user_question = data.question
 
-    # Fetch FAQs
-    response = supabase.table("faqs").select("*").execute()
-    faqs = response.data
+    # Fetch stored questions from Supabase
+    response = supabase.table("questions").select("*").execute()
 
-    if not faqs:
-        return {"message": "No data found"}
+    if not response.data:
+        raise HTTPException(
+            status_code=404,
+            detail="No questions found in database"
+        )
 
-    questions = [faq["question"] for faq in faqs]
+    best_match = None
+    highest_score = 0
 
-    # Encode
-    user_embedding = model.encode(user_question, convert_to_tensor=True)
-    db_embeddings = model.encode(questions, convert_to_tensor=True)
+    for row in response.data:
+        stored_question = row["question"]
+        stored_answer = row["answer"]
 
-    similarities = util.cos_sim(user_embedding, db_embeddings)[0]
+        score = calculate_similarity(user_question, stored_question)
 
-    best_index = similarities.argmax().item()
-    best_score = similarities[best_index].item()
+        if score > highest_score:
+            highest_score = score
+            best_match = {
+                "question": stored_question,
+                "answer": stored_answer,
+                "similarity": round(score, 2)
+            }
 
-    # Threshold
-    if best_score < 0.6:
-        return {"message": "No similar question found"}
-
-    best_faq = faqs[best_index]
-
-    return {
-        "similarity": round(best_score * 100, 2),
-        "matched_question": best_faq["question"],
-        "answer": best_faq["answer"]
-    }        raise HTTPException(status_code=401, detail="Invalid or missing API Key")
-
-    score = calculate_similarity(request.question1, request.question2)
-
-    if score > 80:
-        result = "Very Similar"
-    elif score > 50:
-        result = "Moderately Similar"
-    else:
-        result = "Not Similar"
+    if highest_score < 50:
+        return {
+            "similarity": round(highest_score, 2),
+            "result": "No similar question found"
+        }
 
     return {
-        "similarity": round(score, 2),
-        "result": result
+        "similarity": best_match["similarity"],
+        "matched_question": best_match["question"],
+        "answer": best_match["answer"]
     }
+
+# ===============================
+# Health Check
+# ===============================
+
+@app.get("/")
+def root():
+    return {"status": "API is running"}
