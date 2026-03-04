@@ -1,6 +1,6 @@
-fastapi
-uvicorn
-sentence-transformers
+fastapi==0.115.0
+uvicorn==0.30.6
+sentence-transformers==2.7.0
 torch==2.10.0
-supabase
-python-dotenv
+supabase==2.4.0
+python-dotenv==1.0.1
