@@ -1,7 +1,6 @@
 fastapi
 uvicorn
-numpy
-scikit-learn
-sentence-transformers
---extra-index-url https://download.pytorch.org/whl/cpu
-torch==2.10.0+cpu
+sentence-transformers==2.2.2
+torch==2.1.2
+supabase
+python-dotenv
